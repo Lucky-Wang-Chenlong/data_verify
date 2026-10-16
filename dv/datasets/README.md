@@ -1,64 +1,69 @@
-# 自定义训练数据格式
+# Custom training data format
 
-`scripts/train.sh --custom DIR` 读取的数据集目录必须是下面的格式。整体是 Omni3D 风格的 COCO JSON，每张图额外带一个 depth 文件的路径。读取代码见 `custom3d.py`（数据集类）和 `config.py`（过滤阈值、数据增强）。
+English | [中文](README_zh.md)
 
-写好之后先跑一遍校验，有 ERROR 必须全部修掉：
+`scripts/train.sh --custom DIR` expects the dataset directory in the format below. It is Omni3D-style COCO JSON, plus a depth file path on every image. The loading code is in `custom3d.py` (the dataset class) and `config.py` (filter thresholds and augmentation).
+
+When the data is ready, validate it first and fix every ERROR:
 
 ```bash
-scripts/validate.sh --custom DIR      # 渲染的 GT 框图在 outputs/data_verify/vis/<split>/
+scripts/validate.sh --custom DIR      # GT box renders go to outputs/data_verify/vis/<split>/
 ```
 
-参考示例：`data/custom/toy/`，由 `tools/make_toy_custom.py` 从 SUNRGBD_val 里抽 chair 生成。
+For a worked example, see `data/custom/toy/`. `tools/make_toy_custom.py` builds it from the chairs in SUNRGBD_val.
 
 ---
 
-## 1. 目录结构
+## 1. Directory layout
 
 ```
-DIR/                              # 目录名会作为 run 名的一部分
+DIR/                              # the directory name becomes part of the run name
 ├── annotations/
-│   ├── <Prefix>_train.json       # 训练集（--overfit 时也用来评估）
-│   └── <Prefix>_test.json        # 测试集（结果里显示为 AP_<Prefix>_test）
-├── images/...                    # 任意子目录结构，由 JSON 里的 file_path 指定
-└── depth/...                     # 任意子目录结构，由 JSON 里的 depth_path 指定
+│   ├── <Prefix>_train.json       # training set (with --overfit, also used for evaluation)
+│   └── <Prefix>_test.json        # test set (reported as AP_<Prefix>_test)
+├── images/...                    # any layout; referenced by file_path in the JSON
+└── depth/...                     # any layout; referenced by depth_path in the JSON
 ```
 
-- **split 名**：`<Prefix>` 是你自己起的名字，例如 `MyCat`。默认会自动找 `annotations/` 下唯一的 `*_train.json` 和 `*_test.json`；有多个时，用 `--train-split` / `--test-split` 指定文件名（不带 `.json`）。
-- **不能和 Omni3D 重名**：前缀不要用 `SUNRGBD`、`ARKitScenes` 这类 Omni3D 子集名，否则评估结果会和标准测试集混在一起。
-- **路径**：所有路径都相对 `DIR`。
-- **训练时会生成**：`DIR/cache/<split>.pkl` 是解析好的标注缓存。**改了 JSON 之后要删掉这个缓存**，否则会继续读旧标注。
-- **改用 HDF5（可选）**：读大量小文件慢的时候，可以先运行 `python -m vis4d.data.io.to_hdf5 -p DIR/images`（`depth/` 同理）。生成 `DIR/images.hdf5` 后会自动改用 HDF5 读取，JSON 里的路径不用改。
+- **Split names**: `<Prefix>` is a name you choose, e.g. `MyCat`. By default the scripts pick the one `*_train.json` and the one `*_test.json` under `annotations/`. If there are several, pass the file stem (without `.json`) with `--train-split` / `--test-split`.
+- **No Omni3D names**: don't use an Omni3D subset name such as `SUNRGBD` or `ARKitScenes` as the prefix. Otherwise the evaluation results get mixed with the standard test set.
+- **Paths**: every path is relative to `DIR`.
+- **Created during training**: `DIR/cache/<split>.pkl` holds the parsed annotations. **Delete this cache after you edit a JSON**, or training keeps reading the old annotations.
+- **HDF5 (optional)**: if reading many small files is slow, run `python -m vis4d.data.io.to_hdf5 -p DIR/images` (and the same for `depth/`). Once `DIR/images.hdf5` exists, it is read from HDF5 automatically. The JSON paths stay the same.
 
-## 2. 坐标与单位约定
+## 2. Coordinate and unit conventions
 
-| 项 | 约定 |
+| Item | Convention |
 |---|---|
-| 相机坐标系 | OpenCV：x 向右，y 向下，z 向前；单位米 |
-| `K` | 3×3 内参，对应**实际存储的图像**（如果做过 resize 或 crop，要用处理之后的内参） |
-| `dimensions` | **`[W, H, L]`**，单位米（宽、高、长） |
-| `R_cam` | 3×3 旋转矩阵，把物体坐标变换到相机坐标。必须是正交矩阵且 det = +1。**物体坐标系：x 轴沿 L，y 轴沿 H，z 轴沿 W** |
-| `center_cam` | 3D 框中心在相机坐标系下的位置 |
-| `bbox3D_cam` | 8 个角点 = `R_cam @ c + center_cam`，其中 `c` = ½ × [(−L,−H,−W), (L,−H,−W), (L,H,−W), (−L,H,−W), (−L,−H,W), (L,−H,W), (L,H,W), (−L,H,W)] |
-| 2D 框 | `[x1, y1, x2, y2]`，单位像素；没有时填 `[-1,-1,-1,-1]` |
-| depth | 和图像同样的高 × 宽。可以是 16-bit PNG（值 = 深度米数 × `--depth-scale`，默认 1000，即毫米），也可以是 float32 的 `.npy`（单位米）。0 表示无效；超过 20 m 的值会被丢掉 |
+| Camera frame | OpenCV: x right, y down, z forward. Units are meters. |
+| `K` | 3×3 intrinsics of the image **as stored**. If you resized or cropped the image, use the intrinsics after that step. |
+| `dimensions` | **`[W, H, L]`** in meters (width, height, length) |
+| `R_cam` | 3×3 rotation that maps object coordinates to camera coordinates. It must be orthonormal with det = +1. **Object frame: x along L, y along H, z along W.** |
+| `center_cam` | 3D box center in the camera frame |
+| `bbox3D_cam` | 8 corners = `R_cam @ c + center_cam`, where `c` = ½ × [(−L,−H,−W), (L,−H,−W), (L,H,−W), (−L,H,−W), (−L,−H,W), (L,−H,W), (L,H,W), (−L,H,W)] |
+| 2D boxes | `[x1, y1, x2, y2]` in pixels; `[-1,-1,-1,-1]` when unavailable |
+| Depth | Same height × width as the image. Either a 16-bit PNG (value = depth in meters × `--depth-scale`, default 1000, i.e. millimeters) or a float32 `.npy` in meters. 0 means invalid. Values above 20 m are dropped. |
 
-最容易出错的三处是：`dimensions` 的顺序、物体坐标轴和尺寸的对应关系、depth 的单位。这三处校验器都会检查。它会按约定重新计算角点，并和 `bbox3D_cam` 对比；把角点投影到图像上，和 `bbox2D_proj` 对比；再读取框中心位置的 GT depth，看和框的深度是否一致。
+The three most common mistakes are the order of `dimensions`, the mapping between object axes and dimensions, and the depth unit. The validator checks all three:
+- it recomputes the corners from the convention and compares them with `bbox3D_cam`;
+- it projects the corners into the image and compares them with `bbox2D_proj`;
+- it reads the GT depth at each box center and checks that it agrees with the box depth.
 
-训练时使用 `canonical_rotation=True`：模型会把框规范化成 W ≤ L、yaw ∈ [0, π)，对称造成的歧义不用你处理。但 `R_cam`、尺寸和角点三者之间必须自洽。
+Training uses `canonical_rotation=True`. The model normalizes boxes so that W ≤ L and yaw ∈ [0, π), so you don't need to resolve symmetric ambiguity yourself. But `R_cam`, the dimensions and the corners must agree with each other.
 
-## 3. JSON 字段
+## 3. JSON fields
 
 ```jsonc
 {
   "info": {"name": "MyCat_train"},
   "categories": [
-    {"id": 0, "name": "my category"},   // text prompt 就是这个名字，原样使用
-    {"id": 1, "name": "table"}          // 可选：没有任何框的类别会被当作负样本 prompt
+    {"id": 0, "name": "my category"},   // the text prompt is this exact name
+    {"id": 1, "name": "table"}          // optional: a category with no boxes acts as a negative prompt
   ],
   "images": [{
-    "id": 0,                            // 整数，不能重复
+    "id": 0,                            // unique integer
     "file_path": "images/000000.jpg",
-    "depth_path": "depth/000000.png",   // 没有 depth 的图在训练时会被丢弃
+    "depth_path": "depth/000000.png",   // images without depth are dropped in training
     "width": 1280, "height": 720,
     "K": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]
   }],
@@ -69,35 +74,35 @@ DIR/                              # 目录名会作为 run 名的一部分
     "dimensions": [W, H, L],
     "R_cam": [[...], [...], [...]],
     "bbox3D_cam": [[x, y, z], ...8],
-    "bbox2D_proj":  [x1, y1, x2, y2],   // bbox3D_cam 投影到图像后的外接框（不裁剪）
-    "bbox2D_trunc": [x1, y1, x2, y2],   // bbox2D_proj 裁剪到图像范围内
-    "bbox2D_tight": [x1, y1, x2, y2],   // 可见 mask 的紧框；没有就填 -1
+    "bbox2D_proj":  [x1, y1, x2, y2],   // bounding box of the projected bbox3D_cam (not clipped)
+    "bbox2D_trunc": [x1, y1, x2, y2],   // bbox2D_proj clipped to the image
+    "bbox2D_tight": [x1, y1, x2, y2],   // tight box of the visible mask, or -1s
     "behind_camera": false,
-    "valid3D": true,                    // false 表示这个框被忽略（字段可以填占位值）
-    "truncation": 0.0,                  // 投影框落在图像外的比例；未知填 -1
-    "visibility": 1.0,                  // 可见比例（遮挡）；未知填 -1
-    "lidar_pts": -1, "segmentation_pts": -1, "depth_error": -1   // Omni3D 遗留字段，填 -1 即可
+    "valid3D": true,                    // false = box is ignored (fields may hold placeholders)
+    "truncation": 0.0,                  // fraction of the projected box outside the image, -1 if unknown
+    "visibility": 1.0,                  // visible fraction (occlusion), -1 if unknown
+    "lidar_pts": -1, "segmentation_pts": -1, "depth_error": -1   // Omni3D legacy fields; keep -1
   }]
 }
 ```
 
-训练用的 2D 框按 `bbox2D_trunc` → `bbox2D_proj` → `bbox2D_tight` 的顺序，取第一个有效的。
+The 2D box used for training is the first valid one in the order `bbox2D_trunc` → `bbox2D_proj` → `bbox2D_tight`.
 
-## 4. 会被自动忽略的框
+## 4. Boxes that are ignored automatically
 
-| | 训练 | 测试和评估（Omni3D 默认标准） |
+| | Training | Test and evaluation (Omni3D defaults) |
 |---|---|---|
 | truncation | ≥ 0.5 | ≥ 0.33 |
 | visibility | ≤ 0.1 | ≤ 0.33 |
-| 2D 框高度 | 不限 | < 图像高度的 6.25% |
-| 以下情况两边都忽略 | `behind_camera`、`valid3D=false`、尺寸 ≤ 0 | |
+| 2D box height | no limit | < 6.25% of the image height |
+| Ignored in both | `behind_camera`, `valid3D=false`, dimensions ≤ 0 | |
 
-被忽略的框不会作为回归目标，但仍会抑制在它上面的误检，不会被当成错误检测。训练时，过滤后一个框都不剩的图会被整张丢掉。
+Ignored boxes are never regression targets. Detections on them are not counted as false positives either. In training, an image with no boxes left after filtering is dropped entirely.
 
-训练日志开头会打印每个类别的实例数（`Distribution of instances`），可以用来确认你的类别确实被读进来了。
+At startup the training log prints the instance count per category (`Distribution of instances`). Use it to confirm that your category was loaded.
 
-## 5. 关于 depth
+## 5. About depth
 
-**每张图都应该给 GT depth**，不需要刻意留一部分图不给。depth 分支训练时本身就会随机丢弃 depth 输入：70% 的样本完全不用 depth（单目），20% 用 patch 遮挡过的 depth，10% 用完整 depth。所以模型同时会学到没有 depth 时的情况。
+**Provide GT depth for every image.** There is no need to hold some images back without depth. The depth branch already drops its depth input at random during training: 70% of samples use no depth at all (monocular), 20% use patch-masked depth and 10% use full depth. So the model also learns the no-depth case.
 
-没有 `depth_path` 的图会被训练 loader 直接丢掉。
+The training loader drops any image without a `depth_path`.

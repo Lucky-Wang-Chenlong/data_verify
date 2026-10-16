@@ -58,7 +58,7 @@ scripts/download_data.sh /path/to/data        # 也可以指定目录
 
 ## 3. 准备自己的数据集
 
-数据格式见 **[dv/datasets/README.md](dv/datasets/README.md)**。目录结构如下：
+数据格式见 **[dv/datasets/README_zh.md](dv/datasets/README_zh.md)**。目录结构如下：
 
 ```
 /path/to/mycat/
